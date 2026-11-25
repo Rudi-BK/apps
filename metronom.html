@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Metronom</title>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;800&display=swap" rel="stylesheet">
+<style>
+:root{
+  color-scheme: dark;
+  --bg:#0e2f33; --bg-hit:#f2b705; --ink:#e9f3f1; --ink-hit:#1a1400;
+  --muted:#8fb1ae; --panel:#16454a; --line:#2b6a70;
+  --font:'Barlow Condensed','Arial Narrow',Impact,sans-serif;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+}
+*,*::before,*::after{box-sizing:inherit}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--ink);font-family:var(--font);transition:background .12s}
+body.down{background:var(--bg-hit);color:var(--ink-hit)}
+body.beat{background:#1b5a60}
+body.down.beat{background:var(--bg-hit)}
+#app{height:100%;display:flex;flex-direction:column;padding:12px 16px 16px;max-width:900px;margin:0 auto}
+.top{display:flex;justify-content:space-between;align-items:baseline;font-weight:600;font-size:1.4rem;color:var(--muted)}
+body.down .top{color:#4a3a00}
+.top b{font-weight:800;color:inherit}
+#stage{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;cursor:pointer;user-select:none;-webkit-user-select:none}
+#beat{font-weight:800;line-height:.8;font-size:min(68vh,78vw);font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.dots{display:flex;gap:10px;justify-content:center;margin:4px 0 14px}
+.dot{width:16px;height:16px;border-radius:50%;border:3px solid var(--line);transition:background .08s}
+.dot.on{background:var(--ink);border-color:var(--ink)}
+body.down .dot{border-color:#7a6200}
+body.down .dot.on{background:var(--ink-hit);border-color:var(--ink-hit)}
+.row{display:flex;gap:10px;align-items:center;margin-bottom:10px}
+button{font:inherit;font-weight:800;font-size:1.6rem;color:var(--ink);background:var(--panel);border:2px solid var(--line);border-radius:12px;padding:10px 0;cursor:pointer;min-width:56px;touch-action:manipulation}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid var(--bg-hit);outline-offset:2px}
+button:active{transform:scale(.97)}
+input[type=range]{flex:1;height:44px;accent-color:#f2b705}
+#bpmOut{min-width:4.2ch;text-align:center;font-weight:800;font-size:2.6rem}
+#play{flex:1;font-size:2.2rem;background:var(--bg-hit);color:var(--ink-hit);border-color:var(--bg-hit);padding:14px 0}
+body.down #play{background:var(--ink-hit);color:var(--bg-hit)}
+#tap{flex:1}
+select{font:inherit;font-weight:800;font-size:1.5rem;color:var(--ink);background:var(--panel);border:2px solid var(--line);border-radius:12px;padding:10px 8px;flex:1}
+label.sel{display:flex;align-items:center;gap:8px;flex:1;color:var(--muted);font-size:1.2rem;font-weight:600}
+@media (prefers-reduced-motion:reduce){body{transition:none}}
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="top"><span id="name">Andante</span><span><b id="bpmTop">100</b> BPM</span></div>
+  <div id="stage" role="button" tabindex="0" aria-label="Start oder Stopp"><div id="beat" aria-live="off">1</div></div>
+  <div class="dots" id="dots"></div>
+  <div class="row">
+    <button id="minus" aria-label="Langsamer">−</button>
+    <input id="slider" type="range" min="30" max="240" value="100" aria-label="Tempo in BPM">
+    <button id="plus" aria-label="Schneller">+</button>
+    <div id="bpmOut">100</div>
+  </div>
+  <div class="row">
+    <label class="sel">Takt
+      <select id="sig" aria-label="Taktart">
+        <option value="2">2/4</option><option value="3">3/4</option><option value="4" selected>4/4</option>
+        <option value="5">5/4</option><option value="6">6/8</option><option value="7">7/4</option>
+      </select>
+    </label>
+    <button id="tap">Tap</button>
+  </div>
+  <div class="row"><button id="play">Start</button></div>
+</div>
+<script>
+(function(){
+  var bpm=100, beats=4, playing=false, ctx=null, timer=null;
+  var nextTime=0, nextBeat=0, queue=[], shown=-1;
+  var $=function(id){return document.getElementById(id)};
+  var names=[[40,'Largo'],[66,'Adagio'],[76,'Andante'],[108,'Moderato'],[120,'Allegretto'],[168,'Allegro'],[500,'Presto']];
+
+  function tempoName(b){for(var i=0;i<names.length;i++){if(b<names[i][0]+ (i===0?20:0)&&b<=names[i][0])return names[i][1]}return 'Presto'}
+  function buildDots(){
+    var d=$('dots');d.innerHTML='';
+    for(var i=0;i<beats;i++){var s=document.createElement('span');s.className='dot';d.appendChild(s)}
+  }
+  function setBpm(v){
+    bpm=Math.max(30,Math.min(240,Math.round(v)));
+    $('slider').value=bpm;$('bpmOut').textContent=bpm;$('bpmTop').textContent=bpm;
+    $('name').textContent=tempoName(bpm);
+  }
+  function show(n,hit){
+    $('beat').textContent=n+1;
+    var dots=$('dots').children;
+    for(var i=0;i<dots.length;i++)dots[i].classList.toggle('on',i===n);
+    document.body.classList.toggle('down',n===0);
+    if(hit){document.body.classList.add('beat');setTimeout(function(){document.body.classList.remove('beat')},90)}
+  }
+  function click(t,accent){
+    var o=ctx.createOscillator(),g=ctx.createGain();
+    o.frequency.value=accent?1500:1000;o.type='square';
+    g.gain.setValueAtTime(0.0001,t);
+    g.gain.exponentialRampToValueAtTime(accent?0.5:0.3,t+0.002);
+    g.gain.exponentialRampToValueAtTime(0.0001,t+0.05);
+    o.connect(g);g.connect(ctx.destination);o.start(t);o.stop(t+0.06);
+  }
+  function schedule(){
+    while(nextTime<ctx.currentTime+0.12){
+      click(nextTime,nextBeat===0);
+      queue.push({n:nextBeat,t:nextTime});
+      nextTime+=60/bpm*(beats===6?0.5:1)*(beats===6?1:1);
+      nextBeat=(nextBeat+1)%beats;
+    }
+  }
+  function frame(){
+    if(!playing)return;
+    while(queue.length&&queue[0].t<=ctx.currentTime){var e=queue.shift();show(e.n,true)}
+    requestAnimationFrame(frame);
+  }
+  function start(){
+    if(!ctx)ctx=new (window.AudioContext||window.webkitAudioContext)();
+    if(ctx.state==='suspended')ctx.resume();
+    playing=true;nextBeat=0;queue=[];nextTime=ctx.currentTime+0.06;
+    schedule();timer=setInterval(schedule,25);
+    $('play').textContent='Stopp';requestAnimationFrame(frame);
+  }
+  function stop(){
+    playing=false;clearInterval(timer);queue=[];
+    $('play').textContent='Start';show(0,false);
+  }
+  function toggle(){playing?stop():start()}
+
+  $('play').onclick=toggle;
+  $('stage').onclick=toggle;
+  $('stage').onkeydown=function(e){if(e.key==='Enter'){toggle()}};
+  $('minus').onclick=function(){setBpm(bpm-1)};
+  $('plus').onclick=function(){setBpm(bpm+1)};
+  $('slider').oninput=function(){setBpm(+this.value)};
+  $('sig').onchange=function(){beats=+this.value;buildDots();if(playing){nextBeat=0;queue=[]}else show(0,false)};
+
+  var taps=[];
+  $('tap').onclick=function(){
+    var n=performance.now();
+    if(taps.length&&n-taps[taps.length-1]>2000)taps=[];
+    taps.push(n);if(taps.length>6)taps.shift();
+    if(taps.length>1){
+      var sum=0;for(var i=1;i<taps.length;i++)sum+=taps[i]-taps[i-1];
+      setBpm(60000/(sum/(taps.length-1)));
+    }
+  };
+  document.addEventListener('keydown',function(e){
+    if(e.target.tagName==='SELECT'||e.target.tagName==='INPUT')return;
+    if(e.code==='Space'){e.preventDefault();toggle()}
+    else if(e.key==='ArrowUp'||e.key==='ArrowRight')setBpm(bpm+(e.shiftKey?5:1));
+    else if(e.key==='ArrowDown'||e.key==='ArrowLeft')setBpm(bpm-(e.shiftKey?5:1));
+  });
+  buildDots();setBpm(100);show(0,false);
+})();
+</script>
+</body>
+</html>
