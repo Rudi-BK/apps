@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<title>PDF Editor</title>
+<style>
+  body { font-family: system-ui, sans-serif; background:#f0f2f5; margin:0; padding:20px; }
+  h1 { text-align:center; color:#333; }
+  #drop { border:3px dashed #888; border-radius:12px; padding:40px; text-align:center;
+          background:#fff; cursor:pointer; max-width:700px; margin:0 auto; }
+  #drop.hover { background:#e8f0fe; border-color:#4285f4; }
+  #toolbar { text-align:center; margin:15px 0; }
+  button { margin:4px; padding:8px 14px; border:none; border-radius:6px; background:#4285f4;
+           color:#fff; cursor:pointer; font-size:14px; }
+  button:disabled { background:#aaa; cursor:not-allowed; }
+  button.danger { background:#d93025; }
+  button.green { background:#188038; }
+  #pages { display:flex; flex-wrap:wrap; gap:12px; justify-content:center; max-width:1000px; margin:0 auto; }
+  .page { background:#fff; border:2px solid #ccc; border-radius:8px; padding:8px; width:180px;
+          text-align:center; cursor:pointer; user-select:none; }
+  .page.selected { border-color:#4285f4; background:#e8f0fe; }
+  .page canvas { width:100%; height:auto; }
+  .page .num { margin-top:6px; font-size:13px; color:#555; }
+  #status { text-align:center; color:#555; margin-top:10px; }
+</style>
+</head>
+<body>
+<h1>PDF Editor – Seiten löschen &amp; hinzufügen</h1>
+<div id="drop">PDF hierher ziehen oder klicken zum Auswählen</div>
+<div id="toolbar" style="display:none">
+  <button id="delBtn" class="danger" disabled>Ausgewählte Seiten löschen</button>
+  <button id="addBlankBtn" class="green">Leere Seite anhängen</button>
+  <button id="addPdfBtn">PDF anhängen (Seiten aus anderer Datei)</button>
+  <button id="saveBtn">Speichern / Herunterladen</button>
+  <input type="file" id="pdfInput" accept="application/pdf" hidden>
+  <input type="file" id="appendInput" accept="application/pdf" multiple hidden>
+</div>
+<div id="pages"></div>
+<div id="status"></div>
+
+<script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+<script src="https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
+const { PDFDocument } = PDFLib;
+
+let mainDoc = null;        // pdf-lib document
+let mainBytes = null;      // original bytes
+let selected = new Set();
+
+const drop = document.getElementById('drop');
+const toolbar = document.getElementById('toolbar');
+const pagesDiv = document.getElementById('pages');
+const statusEl = document.getElementById('status');
+const pdfInput = document.getElementById('pdfInput');
+const appendInput = document.getElementById('appendInput');
+const delBtn = document.getElementById('delBtn');
+
+drop.onclick = () => pdfInput.click();
+drop.ondragover = e => { e.preventDefault(); drop.classList.add('hover'); };
+drop.ondragleave = () => drop.classList.remove('hover');
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove('hover');
+  if (e.dataTransfer.files[0]) loadPdf(e.dataTransfer.files[0]); };
+pdfInput.onchange = () => { if (pdfInput.files[0]) loadPdf(pdfInput.files[0]); };
+
+async function loadPdf(file) {
+  statusEl.textContent = 'Lade ' + file.name + ' ...';
+  mainBytes = await file.arrayBuffer();
+  mainDoc = await PDFDocument.load(mainBytes);
+  selected.clear();
+  drop.style.display = 'none';
+  toolbar.style.display = 'block';
+  await renderPages();
+  statusEl.textContent = file.name + ' geladen – ' + mainDoc.getPageCount() + ' Seiten. Klicke Seiten an, um sie auszuwählen.';
+}
+
+async function renderPages() {
+  pagesDiv.innerHTML = '';
+  const src = await pdfjsLib.getDocument({ data: mainBytes.slice(0) }).promise;
+  for (let i = 1; i <= src.numPages; i++) {
+    const page = await src.getPage(i);
+    const vp = page.getViewport({ scale: 0.35 });
+    const canvas = document.createElement('canvas');
+    canvas.width = vp.width; canvas.height = vp.height;
+    await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+    const div = document.createElement('div');
+    div.className = 'page' + (selected.has(i) ? ' selected' : '');
+    div.dataset.page = i;
+    div.appendChild(canvas);
+    const num = document.createElement('div');
+    num.className = 'num'; num.textContent = 'Seite ' + i;
+    div.appendChild(num);
+    div.onclick = () => {
+      selected.has(i) ? selected.delete(i) : selected.add(i);
+      div.classList.toggle('selected');
+      delBtn.disabled = selected.size === 0;
+    };
+    pagesDiv.appendChild(div);
+  }
+  delBtn.disabled = selected.size === 0;
+}
+
+delBtn.onclick = async () => {
+  if (!selected.size) return;
+  const keep = [];
+  for (let i = 1; i <= mainDoc.getPageCount(); i++) if (!selected.has(i)) keep.push(i - 1);
+  const copy = await PDFDocument.create();
+  const copied = await copy.copyPages(mainDoc, keep);
+  copied.forEach(p => copy.addPage(p));
+  mainDoc = copy;
+  mainBytes = await copy.save();
+  selected.clear();
+  await renderPages();
+  statusEl.textContent = 'Seiten gelöscht – jetzt ' + mainDoc.getPageCount() + ' Seiten.';
+};
+
+document.getElementById('addBlankBtn').onclick = async () => {
+  const last = mainDoc.getPage(mainDoc.getPageCount() - 1);
+  mainDoc.addPage([last.getWidth(), last.getHeight()]);
+  mainBytes = await mainDoc.save();
+  await renderPages();
+  statusEl.textContent = 'Leere Seite angehängt – jetzt ' + mainDoc.getPageCount() + ' Seiten.';
+};
+
+document.getElementById('addPdfBtn').onclick = () => appendInput.click();
+appendInput.onchange = async () => {
+  for (const file of appendInput.files) {
+    const bytes = await file.arrayBuffer();
+    const doc = await PDFDocument.load(bytes);
+    const copied = await mainDoc.copyPages(doc, doc.getPageIndices());
+    copied.forEach(p => mainDoc.addPage(p));
+  }
+  mainBytes = await mainDoc.save();
+  appendInput.value = '';
+  await renderPages();
+  statusEl.textContent = 'PDF angehängt – jetzt ' + mainDoc.getPageCount() + ' Seiten.';
+};
+
+document.getElementById('saveBtn').onclick = async () => {
+  const bytes = await mainDoc.save();
+  const blob = new Blob([bytes], { type: 'application/pdf' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'bearbeitet.pdf';
+  a.click();
+  URL.revokeObjectURL(a.href);
+};
+</script>
+</body>
+</html>
